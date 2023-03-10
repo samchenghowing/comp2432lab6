@@ -9,6 +9,8 @@
 #define CARDS 52
 #define READY "R" // student can send this signal to parent to state that he finish on receive 
 #define TOKEN "T" // parent will assign this token to the leading child
+#define END "E" // END game signal
+// Cannot use char(s): A, K, Q, J, T, S, H, C, D
 
 struct card{
    char suit;
@@ -81,7 +83,7 @@ void sortCards(struct card childCards[13]){
    }
 }
 
-struct card playSmallestCard(struct card childCards[13]){
+struct card playLeadCard(struct card childCards[13]){
    // reverse get by rank first, than suit
    int i, smallestPosition = 0; // set larger than 'A' (14)
    struct card smallestCard;
@@ -106,20 +108,22 @@ struct card playSmallerCard(struct card childCards[13], char s, char r){
    smallestCard.suit = s;
    smallestCard.rank = r;
 
-   for (i = 12; i>0; i--){
-      if(childCards[i].played != 1 && childCards[i].suit == smallestCard.suit){ //look for same suit
-         // if(getRank(childCards[i]) > getRank(smallestCard)) { // get a just larger card, seek from back to front
-            childCards[i].played = 1;
-            return childCards[i];
-         // }
+   for (i = 12; i>=0; i--){
+      if(childCards[i].played != 1 && childCards[i].suit == smallestCard.suit){ //look for smallest same suit and not played card
+         childCards[i].played = 1;
+         return childCards[i];
       }
    }
-   if (smallestPosition == 0){
-      // cannot find one with same suit, discard
-      //If there is a chance of “discard” (i.e., no card with 
-      // the same suit as the lead card) during playing, Q will be chosen for discard. If there is no Q, then the 
-      // highest    card  will  be  discarded.  If  there  is  no    card,  the  highest  card  in  the  remaining  hand  will  be 
-      // discarded. 
+   for (i = 0; i< 13; i++){ // cannot find one with same suit, discard S>H>C>D
+      //If there is a chance of “discard” (i.e., no card with the same suit as the lead card) during playing, Q will be chosen for discard. 
+      //If there is no Q, then the highest    card  will  be  discarded.  
+      //If  there  is  no    card,  the  highest  card  in  the  remaining  hand  will  be discarded. 
+      
+      if(childCards[i].played != 1){ // <= since it is sorted in S>H>C>D
+         smallestPosition = i;
+         smallestCard = childCards[i];
+         break;
+      }
    }
    childCards[smallestPosition].played = 1;
    return smallestCard;
@@ -131,7 +135,7 @@ int main(int argc, char *argv[])
    int	p2cPipe[NUMBER_OF_CHILD][2];	// pipe sent from parent to child
    int	c2pPipe[NUMBER_OF_CHILD][2];	// pipe sent from child to parent
    char	buf[BUFFER_SIZE];
-   int	i, n, cNum;
+   int	i, n, cNum, endGame = 0;
 
    for(cNum=0; cNum < NUMBER_OF_CHILD; cNum++) { // create pipe and child processes
       if (pipe(p2cPipe[cNum]) < 0) {
@@ -152,10 +156,9 @@ int main(int argc, char *argv[])
          struct card childCards[13];
          int readyToplay = 0, receivedCards = 0, j = 0, isMyTurn = 0, ret;
 
-         while (1){
+         while (!endGame){
             if ((n = read(p2cPipe[cNum][0],buf, BUFFER_SIZE)) > 0) { // read from pipe
                buf[n] = 0;
-               // printf("<child %d> message [%s] of size %d bytes received\n", getpid(), buf, n);
                if (readyToplay == 0){ // get card stage
                   for (j = 0; j<n; j=j+2){ 
                      childCards[receivedCards].suit = buf[j];
@@ -164,7 +167,8 @@ int main(int argc, char *argv[])
                      receivedCards++;
                   }
                }
-               if (buf[0] == 'T') isMyTurn = 1;
+               if (strcmp(buf, END) == 0) endGame = 1;
+               if (buf[0] == 'T') isMyTurn = 1; //since we have card in buf[1] buf[2]
             }
             if (receivedCards == 13 && readyToplay == 0){
                printf("Child %d pid %d: received", cNum+1, getpid());
@@ -179,9 +183,8 @@ int main(int argc, char *argv[])
                readyToplay = 1;
             }
             if (readyToplay == 1 && isMyTurn == 1) {
-               // printf("Child %d pid %d: now is my turn\n", cNum+1, getpid());
                if (n == 2){ // only receive the token, get the smallest card and sent to parent
-                  struct card c = playSmallestCard(childCards);
+                  struct card c = playLeadCard(childCards);
                   char str[2];
                   str[0] = c.suit;
                   str[1] = c.rank;
@@ -190,10 +193,9 @@ int main(int argc, char *argv[])
                   if (ret < 0) printf("write to pipe error!");
                }
                else{
-                  //get just larger card than the previous player
                   char suit = buf[1];
                   char rank = buf[2];
-                  struct card c = playSmallerCard(childCards, suit, rank);
+                  struct card c = playSmallerCard(childCards, suit, rank); //play smallest same suit card with previous player 
                   char str[2];
                   str[0] = c.suit;
                   str[1] = c.rank;
@@ -207,7 +209,7 @@ int main(int argc, char *argv[])
          
          close(p2cPipe[cNum][0]);
          close(c2pPipe[cNum][1]);
-         printf("<child %d> I have completed!\n", getpid());
+         // printf("<child %d> I have completed!\n", getpid());
          exit(0);
       } else { // parent
          close(p2cPipe[cNum][0]); // close parent in (This pipe is only read from child)
@@ -223,8 +225,7 @@ int main(int argc, char *argv[])
       printf("\n");
 
       while ((n = read(STDIN_FILENO, buf, BUFFER_SIZE)) < 0); // wait until read a line
-
-      char	cards[CARDS][2];
+      char cards[CARDS][2];
       char delim[] = " ";
       char *ptr = strtok(buf, delim);
       i = 0;
@@ -234,63 +235,52 @@ int main(int argc, char *argv[])
          ptr = strtok(NULL, delim);
          i++;
       }
-      for (i = 0; i < CARDS; i++){
-         // printf("<parent> sending encrypted message [%s] to child %d\n",cards[i], i%NUMBER_OF_CHILD);
-         if (i%NUMBER_OF_CHILD == 0) write(p2cPipe[0][1],cards[i], 2); // send the card to child 0
-         else if (i%NUMBER_OF_CHILD == 1) write(p2cPipe[1][1],cards[i], 2); // send the card to child 1
-         else if (i%NUMBER_OF_CHILD == 2) write(p2cPipe[2][1],cards[i], 2); // send the card to child 2
-         else if (i%NUMBER_OF_CHILD == 3) write(p2cPipe[3][1],cards[i], 2); // send the card to child 3
-      }
+      for (i = 0; i < CARDS; i++) write(p2cPipe[i%NUMBER_OF_CHILD][1], cards[i], 2); // send the card to childs
 
-      int readyChilds = 0, round = 1, isPlaying = 0, j = 0, roundCount = 0, winningChild = 0;
-      struct card largestCard, currentCard; // set as smallest at the begining
+      int j = 0, readyChilds = 0, round = 1, isPlaying = 0, roundCount = 0, winningChild = 0, cNum = 0;
+      int scores[4]; 
+      for (i = 0; i<4; i++) scores[i] = 0;
       char str[3];
-      largestCard.suit = 'D';
-      largestCard.rank = '1';
-
-      struct card playedCards[NUMBER_OF_CHILD]; //to store each turn child's cards? needed?
+      struct card largestCard, currentCard;
+      largestCard.suit = 'D'; largestCard.rank = '1'; // set as smallest at the begining
       
-      while (1) {
-         // https://stackoverflow.com/questions/36242252/read-cards-from-multiple-pipes
-         
-         for(cNum = 0; cNum < NUMBER_OF_CHILD; cNum++) {
+      while (!endGame) {
+         for(; cNum < NUMBER_OF_CHILD && !endGame; cNum++) { // https://stackoverflow.com/questions/36242252/read-data-from-multiple-pipes
             if ((n = read(c2pPipe[cNum][0],buf, BUFFER_SIZE)) > 0) { // read from pipe
                buf[n] = 0;
-               // printf("<parent> message from child %d [%s] of size %d bytes received\n",cNum+1,buf,n);
+
                if (strcmp(buf, READY) == 0) readyChilds++;
-               if (isPlaying == 1){
-
-                  roundCount++; 
-                  // printf("Parent pid %d: roundCount %d, cNum %d\n", getpid(), roundCount, cNum);
-
+               if (isPlaying == 1){ 
                   printf("Parent pid %d: child %d plays %s\n", getpid(), cNum+1, buf);
-                  str[0] = 'T'; // str[0] = TOKEN;
-                  str[1] = buf[0]; currentCard.suit = buf[0];
-                  str[2] = buf[1]; currentCard.rank = buf[1];
 
-                  if (isLargerCard(currentCard, largestCard) == 1){
+                  str[0] = 'T'; // str[0] = TOKEN;
+                  if(roundCount == 0) { 
+                     // only change suit when a round start, in case of discard
+                     str[1] = buf[0]; 
+                     currentCard.suit = buf[0]; 
+                  }
+                  str[2] = buf[1]; currentCard.rank = buf[1];
+                  if (isLargerCard(currentCard, largestCard) == 1 && buf[0] == currentCard.suit){ // only win if the suit is same and larger
                      largestCard = currentCard;
                      winningChild = cNum + 1;
-                     // printf("Parent pid %d: roundCount %d, winningChild %d, currentCard %c, largestCard %c \n", getpid(), roundCount, winningChild, currentCard.rank, largestCard.rank);
                   }
-
-                  if (roundCount == 4){
+                  if (roundCount == 3){
                      roundCount = 0;
                      round++;
                      printf("Parent pid %d: child %d wins the trick\n", getpid(), winningChild);
-                     printf("Parent pid %d: round %d child %d to lead\n", getpid(), round, winningChild);
-                     cNum = winningChild - 1; // reset count
-                     write(p2cPipe[cNum][1], TOKEN, sizeof(TOKEN)); // tell win child to start a new round
-                     if (cNum < 3) cNum--;
-                     largestCard.suit = 'D';
-                     largestCard.rank = '1'; // reset to lowest card
+                     if (round == 14) endGame = 1;
+                     else{
+                        printf("Parent pid %d: round %d child %d to lead\n", getpid(), round, winningChild);
+                        cNum = winningChild - 2; // reset count
+                        write(p2cPipe[cNum + 1][1], TOKEN, sizeof(TOKEN)); // tell win child to start a new round
+                        largestCard.suit = 'D'; largestCard.rank = '1'; // reset to lowest card 
+                     }
                   }
                   else {
+                     roundCount++; 
                      if (cNum == 3) cNum = -1; // reset the count
-                     // printf("Parent pid %d: telling next child %d plays %s\n", getpid(), cNum+1, buf);
                      write(p2cPipe[cNum+1][1], str, sizeof(str)); // tell next child what card was played
                   }
-
                }
             }
          }
@@ -299,12 +289,10 @@ int main(int argc, char *argv[])
             printf("Parent pid %d: round %d child %d to lead\n", getpid(), round, cNum+1);
             write(p2cPipe[cNum][1], TOKEN, sizeof(TOKEN)); // pass TOKEN to that child
          }
-         // sleep a little to avoid 100% CPU usage
-         // sleep(1);
       }
 
-      printf("Parent, pid %d: am i done?\n", getpid());
-      for(i = 0; i < NUMBER_OF_CHILD; i++) {
+      for (i = 0; i < NUMBER_OF_CHILD; i++) write(p2cPipe[i][1], END, sizeof(END)); // send end game signal
+      for (i = 0; i < NUMBER_OF_CHILD; i++) {
          int retval;
          int cid = wait(&retval);
          if (WEXITSTATUS(retval) == 0) {
@@ -312,11 +300,13 @@ int main(int argc, char *argv[])
                if (childPids[j] == cid) {
                   close(p2cPipe[i][1]);
                   close(c2pPipe[i][0]);
-                  printf("Parent, pid %d: children %d completed execution\n", getpid(), j+1);
+                  // printf("Parent, pid %d: children %d completed execution\n", getpid(), j+1);
                }
             }
          }
       }
+      printf("Parent  pid %d: game completed\n", getpid());
+      printf("Parent  pid %d: score = <%d %d %d %d>\n", getpid(), scores[0], scores[1], scores[2], scores[3]);
    }
    exit(0);
 }
