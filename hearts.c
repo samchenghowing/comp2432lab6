@@ -103,30 +103,56 @@ struct card playLeadCard(struct card childCards[13]){
 
 struct card playSmallerCard(struct card childCards[13], char s, char r){
    // reverse get by rank first, than suit
-   int i, smallestPosition = 0;
+   int i, largestPosition = 0;
    struct card smallestCard;
    smallestCard.suit = s;
    smallestCard.rank = r;
 
    for (i = 12; i>=0; i--){
-      if(childCards[i].played != 1 && childCards[i].suit == smallestCard.suit){ //look for smallest same suit and not played card
+      if(childCards[i].played != 1 && childCards[i].suit == smallestCard.suit){ //look for same suit and not played card
          childCards[i].played = 1;
          return childCards[i];
       }
    }
-   for (i = 0; i< 13; i++){ // cannot find one with same suit, discard S>H>C>D
-      //If there is a chance of “discard” (i.e., no card with the same suit as the lead card) during playing, Q will be chosen for discard. 
-      //If there is no Q, then the highest    card  will  be  discarded.  
-      //If  there  is  no    card,  the  highest  card  in  the  remaining  hand  will  be discarded. 
+   for (i = 0; i< 13; i++){ // cannot find one with same suit, we need to discard
+      //If there is a chance of “discard” (i.e., no card with the same suit as the lead card) during playing, SQ will be chosen for discard. 
+      //If there is no SQ, then the highest  H  card  will  be  discarded.  
+      //If  there  is  no  H  card,  the  highest  card  in  the  remaining  hand  will  be discarded. 
       
       if(childCards[i].played != 1){ // <= since it is sorted in S>H>C>D
-         smallestPosition = i;
+         // simply get the largest card first
+         largestPosition = i;
          smallestCard = childCards[i];
          break;
       }
    }
-   childCards[smallestPosition].played = 1;
+   for (i = 0; i< 13; i++){
+      if(childCards[i].played != 1){
+         if(childCards[i].suit == 'S' && childCards[i].rank == 'Q') {
+            childCards[i].played = 1;
+            return childCards[i];
+         }
+         if(childCards[i].suit == 'H') {
+            childCards[i].played = 1;
+            return childCards[i];
+         }
+      }
+   }
+   
+   // no SQ or H
+   childCards[largestPosition].played = 1;
    return smallestCard;
+}
+
+int getScore(struct card cards[4]){
+   int score = 0, i;
+   for (i = 0; i<4; i++){
+      if (cards[i].suit == 'S' && cards[i].rank == 'Q') score = score + 13;
+      else{
+         if (cards[i].suit == 'H') score++; 
+      }
+   }
+   return score;
 }
 
 int main(int argc, char *argv[])
@@ -241,7 +267,8 @@ int main(int argc, char *argv[])
       int scores[4]; 
       for (i = 0; i<4; i++) scores[i] = 0;
       char str[3];
-      struct card largestCard, currentCard;
+      struct card largestCard, currentCard, tempCard;
+      struct card roundCard[4];
       largestCard.suit = 'D'; largestCard.rank = '1'; // set as smallest at the begining
       
       while (!endGame) {
@@ -260,14 +287,18 @@ int main(int argc, char *argv[])
                      currentCard.suit = buf[0]; 
                   }
                   str[2] = buf[1]; currentCard.rank = buf[1];
+
+                  tempCard.suit = buf[0]; tempCard.rank = buf[1]; // temp card not for compare
+                  roundCard[roundCount] = tempCard;
+
                   if (isLargerCard(currentCard, largestCard) == 1 && buf[0] == currentCard.suit){ // only win if the suit is same and larger
                      largestCard = currentCard;
                      winningChild = cNum + 1;
                   }
                   if (roundCount == 3){
-                     roundCount = 0;
                      round++;
                      printf("Parent pid %d: child %d wins the trick\n", getpid(), winningChild);
+                     scores[winningChild-1] = scores[winningChild-1] + getScore(roundCard);
                      if (round == 14) endGame = 1;
                      else{
                         printf("Parent pid %d: round %d child %d to lead\n", getpid(), round, winningChild);
@@ -275,6 +306,7 @@ int main(int argc, char *argv[])
                         write(p2cPipe[cNum + 1][1], TOKEN, sizeof(TOKEN)); // tell win child to start a new round
                         largestCard.suit = 'D'; largestCard.rank = '1'; // reset to lowest card 
                      }
+                     roundCount = 0;
                   }
                   else {
                      roundCount++; 
@@ -306,6 +338,15 @@ int main(int argc, char *argv[])
          }
       }
       printf("Parent  pid %d: game completed\n", getpid());
+
+      int bigWinner = -1;
+      for (i = 0; i<4; i++) if (scores[i] == 26) bigWinner = i;// check if big winner exist 
+      if (bigWinner >= 0) {
+         for (i = 0; i<4; i++){ 
+            if (i != bigWinner) scores[i] = 26;
+            else scores[i] = 0;
+         }
+      }
       printf("Parent  pid %d: score = <%d %d %d %d>\n", getpid(), scores[0], scores[1], scores[2], scores[3]);
    }
    exit(0);
